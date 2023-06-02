@@ -1,9 +1,17 @@
 import logging
 import os
 from tqdm import tqdm
+from colorama import Fore, Style
+
 
 class Logger:
-    def __init__(self, log_file='reports/logs/log.txt', use_progress_bar=False):
+    CRITICAL = logging.CRITICAL
+    ERROR = logging.ERROR
+    WARNING = logging.WARNING
+    INFO = logging.INFO
+    DEBUG = logging.DEBUG
+
+    def __init__(self, log_file='../reports/logs/log.txt', use_progress_bar=False, log_level = logging.INFO):
         self.log_file = log_file
         self.use_progress_bar = use_progress_bar
 
@@ -13,7 +21,7 @@ class Logger:
 
         # Initialize logger
         self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO)
+        self.logger.setLevel(log_level)
 
         # Create file handler and formatter
         file_handler = logging.FileHandler(self.log_file)
@@ -23,7 +31,21 @@ class Logger:
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
 
+    def print_log(self, level, message):
+        if level >= self.logger.getEffectiveLevel():
+            if level == logging.INFO:
+                colored_message = f"{Fore.GREEN}{message}{Style.RESET_ALL}"
+            elif level == logging.WARNING:
+                colored_message = f"{Fore.YELLOW}{message}{Style.RESET_ALL}"
+            elif level == logging.ERROR:
+                colored_message = f"{Fore.RED}{message}{Style.RESET_ALL}"
+            else:
+                colored_message = message
+            print(colored_message)
+
+
     def log(self, message, level=logging.INFO):
+        self.print_log(level, message)
         self.logger.log(level, message)
 
     def progress_bar(self, iterable, desc='', total=None):
@@ -32,9 +54,10 @@ class Logger:
         return iterable
 
 
-if __name__ == '__main__':
+# if __name__ == '__main__':
+#     pass
     # Initialize logger
-    logger = Logger(log_file='../reports/logs/log.txt', use_progress_bar=True)
+    # logger = Logger(log_file='../reports/logs/log.txt', use_progress_bar=True)
 
     # Write logs
     # logger.log('Starting data collection...')
