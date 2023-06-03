@@ -1,4 +1,6 @@
 # This contains the scripts to gather, clean, and transform the data.
+import gc
+import logging
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -34,7 +36,6 @@ class WebScraper:
     ROW_DATA_PATH = '../data/raw/'
     ROW_TABLE_FILE_NAME = 'climate_air_quality.csv'
     driver = None
-    stations_elements = []
     stations_names = []
     station_data_counter = 0
     latest_fetched_date: str
@@ -46,7 +47,10 @@ class WebScraper:
         self.driver_path = driver_path
         self.df = df
         self.data_handler = DataHandler()
+        self.stations_elements = []
         self.selected_stations = self.data_handler.load_data_params("SELECTED_STATIONS")
+        if not self.selected_stations:
+            logger.log(f"Failed to load stations from file", logging.ERROR)
         if driver_type.lower() == 'chrome':
             chrome_options = None
             if HEADLESS_MODE:
@@ -66,7 +70,6 @@ class WebScraper:
 
     def __init_list_of_stations(self):
         if not self.stations_elements:
-            logger.log(f"{len(self.stations_elements)} stations found")
             time.sleep(3)
             main_ul = self.wait.until(EC.presence_of_element_located(
                 (By.XPATH, "//ul[contains(@class, 'k-group') and contains(@class, 'k-treeview-lines')]")))
@@ -84,6 +87,7 @@ class WebScraper:
                 if not station_data.get("station_element"):
                     logger.log(f"Error, didn't find element for station {station_name}")
 
+            logger.log(f"{len(self.stations_elements)} stations found")
             logger.log(f"{len(self.selected_stations.items())} selected stations")
             logger.log(f"Stations are: {self.stations_names}", logger.DEBUG)
 
@@ -140,14 +144,16 @@ class WebScraper:
         self.__init_list_of_stations()
         for station_name, station_data in self.selected_stations.items():
             station_date = station_data.get("latest_fetched_date")
+            if self.str_to_date(station_date).date() == datetime.today().date():
+                continue
             self.current_station_element = station_data.get("station_element")
             self.current_station_name = station_name
             self.station_data_counter = 0
             if self.select_station(self.current_station_element):
                 self.select_date(start_date if start_date else self.str_to_date(station_date))
                 self.show_station_page()
-                self.get_current_station_and_date_data(station_name)
-                self.exit_station_page()
+                if self.get_current_station_and_date_data(station_name):
+                    self.exit_station_page()
                 # Unselect
                 self.select_station(self.current_station_element)
                 logger.log(f"Total {self.station_data_counter} fetched data [rXc] for {station_name} station")
@@ -161,26 +167,33 @@ class WebScraper:
         row_number = 1
         rows_data = []
         while next_page:
-            dates_column, rows_data, columns = self.init_page_params()
-            logger.log(f"row num- {row_number}", logger.DEBUG)
-            # Find all td elements with role "gridcell" within the first table
-            data_and_hours_elements = dates_column.find_elements(By.CSS_SELECTOR, "tr.k-master-row, tr.k-alt.k-master-row")
-            rows_to_fetch = []
-            dates_to_fetch = []
-            for index, element in enumerate(data_and_hours_elements):
-                self.scroll_to_element(element)
-                if element.text.split(' ')[0] in FETCH_HOURS:
-                    dates_to_fetch.append(element.text)
-                    rows_to_fetch.append(rows_data[index])
+            init_page_params_result = self.init_page_params()
+            if init_page_params_result is None:
+                if len(self.df) != 1:
+                    self.save_df(path, station_name, self.latest_fetched_date)
+                return False
+            else:
+                dates_column, rows_data, columns = init_page_params_result
+                logger.log(f"row num- {row_number}", logger.DEBUG)
+                # Find all td elements with role "gridcell" within the first table
+                data_and_hours_elements = dates_column.find_elements(By.CSS_SELECTOR, "tr.k-master-row, tr.k-alt.k-master-row")
+                rows_to_fetch = []
+                dates_to_fetch = []
+                for index, element in enumerate(data_and_hours_elements):
+                    self.scroll_to_element(element)
+                    if element.text.split(' ')[0] in FETCH_HOURS:
+                        dates_to_fetch.append(element.text)
+                        rows_to_fetch.append(rows_data[index])
 
-            self.get_data_from_table(station_name, dates_to_fetch, rows_to_fetch, columns)
-            if row_number >= SAVE_THRESHOLD:
-                self.save_df(path, station_name, self.latest_fetched_date)
-                row_number = 1
+                self.get_data_from_table(station_name, dates_to_fetch, rows_to_fetch, columns)
+                if row_number >= SAVE_THRESHOLD:
+                    self.save_df(path, station_name, self.latest_fetched_date)
+                    row_number = 1
 
-            row_number += 1
-            next_page = self.next_page()
+                row_number += 1
+                next_page = self.next_page()
         self.save_df(path, station_name, self.latest_fetched_date)
+        return True
 
 
     def get_data_from_table(self, station_name, dates_to_fetch, rows_to_fetch, columns):
@@ -252,17 +265,20 @@ class WebScraper:
                     # Need to add one more day on first retry
                     if retry == 0:
                         self.add_days_to_date(1)
-                    logger.log(f"{self.latest_fetched_date} date is N/A. Retrying... ({retry+1}/{max_retries})", logger.ERROR)
                     # Add one day using timedelta
-                    self.select_date(self.add_days_to_date(1))
+                    if self.str_to_date(self.latest_fetched_date).date() >= datetime.today().date():
+                        return None
+                    self.add_days_to_date(1)
+                    logger.log(f"{self.latest_fetched_date} date is N/A. Retrying... ({retry+1}/{max_retries})", logger.ERROR)
+                    self.select_date(self.str_to_date(self.latest_fetched_date))
                     self.show_station_page()
                     time.sleep(2)  # Add any necessary delay before retrying
                 else:
                     logger.log(f"Maximum retries reached. Unable to load page.", logger.ERROR)
-                    raise
+                    return None
             except Exception as e:
                 logger.log(f"Error occurred while loading page: {e}", logger.ERROR)
-                raise
+                return None
 
     def next_page(self):
         next_page_button = self.wait.until(EC.presence_of_element_located((By.ID,  'reportForward')))
@@ -320,13 +336,19 @@ def retry_acquire_stations_data(df):
     retry_count = 50  # Number of retries
     retry_delay = 5  # Delay between retries in seconds
     while retry_count > 0:
-        web_scraper = None
         try:
+            web_scraper = None
             web_scraper = WebScraper(WebScraper.SCRAPE_URL, DRIVER_TYPE, DRIVER_PATH, df)
+            logger.log(f"web_scraper.stations_elements {hex(id(web_scraper.stations_elements))}")
             web_scraper.open_menu()
             web_scraper.acquire_stations_data()
-            time.sleep(5)
-            break  # Break out of the loop if the code succeeds without exceptions
+
+            # Clear variables underneath web_scraper
+            # web_scraper.stations_elements = None
+            # web_scraper = None
+            # Set other variables to None if applicable
+            # del web_scraper  # Delete the reference to the object
+            # gc.collect()  # Force garbage collection
         except Exception as e:
             log_message = f"An exception occurred: {str(e)}"
             traceback_str = traceback.format_tb(e.__traceback__)
@@ -335,7 +357,8 @@ def retry_acquire_stations_data(df):
             traceback.print_tb(e.__traceback__)
             print('-' * 40)
             retry_count -= 1
-            web_scraper.driver.quit()
+            if web_scraper:
+                web_scraper.driver.quit()
             if retry_count == 0:
                 logger.log("Maximum retry attempts reached. Exiting...", logger.ERROR)
             else:
