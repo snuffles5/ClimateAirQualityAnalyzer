@@ -10,6 +10,7 @@ class Logger:
     WARNING = logging.WARNING
     INFO = logging.INFO
     DEBUG = logging.DEBUG
+    LOG_LINE_SEPERATOR_LENGTH = 40
 
     def __init__(self, log_file='../reports/logs/log.txt', use_progress_bar=False, log_level = logging.INFO):
         self.log_file = log_file
@@ -31,7 +32,7 @@ class Logger:
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
 
-    def print_log(self, level, message):
+    def __print_log(self, message, level):
         if level >= self.logger.getEffectiveLevel():
             if level == logging.INFO:
                 colored_message = f"{Fore.GREEN}{message}{Style.RESET_ALL}"
@@ -43,10 +44,20 @@ class Logger:
                 colored_message = message
             print(colored_message)
 
-
     def log(self, message, level=logging.INFO):
-        self.print_log(level, message)
+        self.__print_log(message, level)
         self.logger.log(level, message)
+
+    def log_separator_line(self, total_length: int, message: str = None, level=logging.INFO):
+        separator_line: str = ''
+        if message:
+            line_length = total_length - len(message)
+            left_dashes = line_length // 2
+            right_dashes = line_length - left_dashes
+            separator_line: str = '-' * left_dashes + message + '-' * right_dashes
+        else:
+            separator_line = f"{'-' * total_length}"
+        self.log(separator_line, level)
 
     def progress_bar(self, iterable, desc='', total=None):
         if self.use_progress_bar:
